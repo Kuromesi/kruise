@@ -18,6 +18,7 @@ limitations under the License.
 package statefulset
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"sort"
@@ -25,6 +26,7 @@ import (
 
 	apps "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	intstrutil "k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -52,7 +54,7 @@ type StatefulSetControlInterface interface {
 	// If an implementation returns a non-nil error, the invocation will be retried using a rate-limited strategy.
 	// Implementors should sink any errors that they do not wish to trigger a retry, and they may feel free to
 	// exit exceptionally at any point provided they wish the update to be re-run at a later point in time.
-	UpdateStatefulSet(set *appsv1beta1.StatefulSet, pods []*v1.Pod) error
+	UpdateStatefulSet(ctx context.Context, set *appsv1beta1.StatefulSet, pods []*v1.Pod) error
 	// ListRevisions returns a array of the ControllerRevisions that represent the revisions of set. If the returned
 	// error is nil, the returns slice of ControllerRevisions is valid.
 	ListRevisions(set *appsv1beta1.StatefulSet) ([]*apps.ControllerRevision, error)
@@ -101,7 +103,9 @@ type defaultStatefulSetControl struct {
 // strategy allows these constraints to be relaxed - pods will be created and deleted eagerly and
 // in no particular order. Clients using the burst strategy should be careful to ensure they
 // understand the consistency implications of having unpredictable numbers of pods available.
-func (ssc *defaultStatefulSetControl) UpdateStatefulSet(set *appsv1beta1.StatefulSet, pods []*v1.Pod) error {
+func (ssc *defaultStatefulSetControl) UpdateStatefulSet(ctx context.Context, set *appsv1beta1.StatefulSet, pods []*v1.Pod) error {
+	set = set.DeepCopy() // set is modified when a new revision is created in performUpdate. Make a copy now to avoid mutation errors.
+
 	// list all revisions and sort them
 	revisions, err := ssc.ListRevisions(set)
 	if err != nil {
@@ -109,7 +113,7 @@ func (ssc *defaultStatefulSetControl) UpdateStatefulSet(set *appsv1beta1.Statefu
 	}
 	history.SortControllerRevisions(revisions)
 
-	currentRevision, updateRevision, err := ssc.performUpdate(set, pods, revisions)
+	currentRevision, updateRevision, err := ssc.performUpdate(ctx, set, pods, revisions)
 	if err != nil {
 		return utilerrors.NewAggregate([]error{err, ssc.truncateHistory(set, pods, revisions, currentRevision, updateRevision)})
 	}
@@ -119,7 +123,7 @@ func (ssc *defaultStatefulSetControl) UpdateStatefulSet(set *appsv1beta1.Statefu
 }
 
 func (ssc *defaultStatefulSetControl) performUpdate(
-	set *appsv1beta1.StatefulSet, pods []*v1.Pod, revisions []*apps.ControllerRevision) (*apps.ControllerRevision, *apps.ControllerRevision, error) {
+	ctx context.Context, set *appsv1beta1.StatefulSet, pods []*v1.Pod, revisions []*apps.ControllerRevision) (*apps.ControllerRevision, *apps.ControllerRevision, error) {
 	var currentStatus *appsv1beta1.StatefulSetStatus
 	// get the current, and update revisions
 	currentRevision, updateRevision, collisionCount, err := ssc.getStatefulSetRevisions(set, revisions)
@@ -133,29 +137,33 @@ func (ssc *defaultStatefulSetControl) performUpdate(
 	}
 
 	// perform the main update function and get the status
-	currentStatus, getStatusErr := ssc.updateStatefulSet(set, currentRevision, updateRevision, collisionCount, pods, revisions)
-	updateStatusErr := ssc.updateStatefulSetStatus(set, currentStatus)
+	currentStatus, getStatusErr := ssc.updateStatefulSet(ctx, set, currentRevision, updateRevision, collisionCount, pods, revisions)
+	updateStatusErr := ssc.updateStatefulSetStatus(ctx, set, currentStatus)
 
-	if getStatusErr != nil {
-		return currentRevision, updateRevision, getStatusErr
+	if getStatusErr != nil && currentStatus == nil {
+		return currentRevision, updateRevision, err
 	}
-	if updateStatusErr != nil {
+	if updateStatusErr == nil {
+		klog.V(4).InfoS("Updated status", "statefulSet", klog.KObj(set),
+			"replicas", currentStatus.Replicas,
+			"readyReplicas", currentStatus.ReadyReplicas,
+			"currentReplicas", currentStatus.CurrentReplicas,
+			"updatedReplicas", currentStatus.UpdatedReplicas)
+	}
+
+	switch {
+	case getStatusErr != nil && updateStatusErr != nil:
+		klog.ErrorS(updateStatusErr, "Could not update status", "statefulSet", klog.KObj(set))
+		return currentRevision, updateRevision, err
+	case getStatusErr != nil:
+		return currentRevision, updateRevision, err
+	case updateStatusErr != nil:
 		return currentRevision, updateRevision, updateStatusErr
 	}
 
-	klog.V(4).Infof("StatefulSet %s/%s pod status replicas=%d ready=%d current=%d updated=%d",
-		set.Namespace,
-		set.Name,
-		currentStatus.Replicas,
-		currentStatus.ReadyReplicas,
-		currentStatus.CurrentReplicas,
-		currentStatus.UpdatedReplicas)
-
-	klog.V(4).Infof("StatefulSet %s/%s revisions current=%s update=%s",
-		set.Namespace,
-		set.Name,
-		currentStatus.CurrentRevision,
-		currentStatus.UpdateRevision)
+	klog.V(4).InfoS("StatefulSet revisions", "statefulSet", klog.KObj(set),
+		"currentRevision", currentStatus.CurrentRevision,
+		"updateRevision", currentStatus.UpdateRevision)
 
 	return currentRevision, updateRevision, nil
 }
@@ -306,6 +314,7 @@ func (ssc *defaultStatefulSetControl) getStatefulSetRevisions(
 
 // TODO (RZ): Break the below spaghetti code into smaller chucks with unit tests
 func (ssc *defaultStatefulSetControl) updateStatefulSet(
+	ctx context.Context,
 	set *appsv1beta1.StatefulSet,
 	currentRevision *apps.ControllerRevision,
 	updateRevision *apps.ControllerRevision,
@@ -477,11 +486,7 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 	}
 
 	if unhealthy > 0 {
-		klog.V(4).Infof("StatefulSet %s/%s has %d unhealthy Pods starting with %s",
-			set.Namespace,
-			set.Name,
-			unhealthy,
-			firstUnhealthyPod.Name)
+		klog.V(4).InfoS("StatefulSet has unhealthy Pods", "statefulSet", klog.KObj(set), "unhealthyReplicas", unhealthy, "pod", klog.KObj(firstUnhealthyPod))
 	}
 
 	// If the StatefulSet is being deleted, don't do anything other than updating
@@ -531,7 +536,7 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 			}
 
 			lifecycle.SetPodLifecycle(appspub.LifecycleStateNormal)(replicas[i])
-			if err := ssc.podControl.CreateStatefulPod(set, replicas[i]); err != nil {
+			if err := ssc.podControl.CreateStatefulPod(ctx, set, replicas[i]); err != nil {
 				msg := fmt.Sprintf("StatefulPodControl failed to create Pod error: %s", err)
 				condition := NewStatefulsetCondition(appsv1beta1.FailedCreatePod, v1.ConditionTrue, "", msg)
 				SetStatefulsetCondition(&status, condition)
@@ -561,11 +566,8 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 		// If we find a Pod that is currently terminating, we must wait until graceful deletion
 		// completes before we continue to make progress.
 		if isTerminating(replicas[i]) && monotonic {
-			klog.V(4).Infof(
-				"StatefulSet %s/%s is waiting for Pod %s to Terminate",
-				set.Namespace,
-				set.Name,
-				replicas[i].Name)
+			klog.V(4).InfoS("StatefulSet is waiting for Pod to Terminate",
+				"statefulSet", klog.KObj(set), "pod", klog.KObj(replicas[i]))
 			return &status, nil
 		} else if isTerminating(replicas[i]) && decreaseAndCheckMaxUnavailable(scaleMaxUnavailable) {
 			klog.V(4).Infof(
@@ -601,11 +603,8 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 						replicas[i].Name,
 						minReadySeconds)
 				} else {
-					klog.V(4).Infof(
-						"StatefulSet %s/%s is waiting for Pod %s to be Running and Ready",
-						set.Namespace,
-						set.Name,
-						replicas[i].Name)
+					klog.V(4).InfoS("StatefulSet is waiting for Pod to be Running and Ready",
+						"statefulSet", klog.KObj(set), "pod", klog.KObj(replicas[i]))
 				}
 				return &status, nil
 			} else if !isAvailable && decreaseAndCheckMaxUnavailable(scaleMaxUnavailable) {
@@ -665,11 +664,8 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 	for target := len(condemned) - 1; target >= 0; target-- {
 		// wait for terminating pods to expire
 		if isTerminating(condemned[target]) {
-			klog.V(4).Infof(
-				"StatefulSet %s/%s is waiting for Pod %s to Terminate prior to scale down",
-				set.Namespace,
-				set.Name,
-				condemned[target].Name)
+			klog.V(4).InfoS("StatefulSet is waiting for Pod to Terminate prior to scale down",
+				"statefulSet", klog.KObj(set), "pod", klog.KObj(condemned[target]))
 			// block if we are in monotonic mode
 			if monotonic {
 				return &status, nil
@@ -678,20 +674,15 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 		}
 		// if we are in monotonic mode and the condemned target is not the first unhealthy Pod block
 		if avail, waitTime := isRunningAndAvailable(condemned[target], minReadySeconds); !avail && monotonic && condemned[target] != firstUnhealthyPod {
-			klog.V(4).Infof(
-				"StatefulSet %s/%s is waiting for Pod %s to be Running and Available prior to scale down",
-				set.Namespace,
-				set.Name,
-				firstUnhealthyPod.Name)
+			klog.V(4).InfoS("StatefulSet is waiting for Pod to be Available prior to scale down",
+				"statefulSet", klog.KObj(set), "pod", klog.KObj(firstUnhealthyPod))
 			if waitTime > 0 {
 				durationStore.Push(getStatefulSetKey(condemned[target]), waitTime)
 			}
 			return &status, nil
 		}
-		klog.V(2).Infof("StatefulSet %s/%s terminating Pod %s for scale down",
-			set.Namespace,
-			set.Name,
-			condemned[target].Name)
+		klog.V(2).InfoS("Pod of StatefulSet is terminating for scale down",
+			"statefulSet", klog.KObj(set), "pod", klog.KObj(condemned[target]))
 
 		modified, err := ssc.deletePod(set, condemned[target])
 		if err != nil || modified {
@@ -711,6 +702,16 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 	// for the OnDelete strategy we short circuit. Pods will be updated when they are manually deleted.
 	if set.Spec.UpdateStrategy.Type == apps.OnDeleteStatefulSetStrategyType {
 		return &status, nil
+	}
+
+	if utilfeature.DefaultFeatureGate.Enabled(features.MaxUnavailableStatefulSet) {
+		return updateStatefulSetAfterInvariantEstablished(ctx,
+			ssc,
+			set,
+			replicas,
+			updateRevision,
+			status,
+		)
 	}
 
 	// TODO: separate out the below update only related logic
@@ -990,10 +991,85 @@ func (ssc *defaultStatefulSetControl) inPlaceUpdatePod(
 	return false, nil
 }
 
+func updateStatefulSetAfterInvariantEstablished(
+	ctx context.Context,
+	ssc *defaultStatefulSetControl,
+	set *appsv1beta1.StatefulSet,
+	replicas []*v1.Pod,
+	updateRevision *apps.ControllerRevision,
+	status appsv1beta1.StatefulSetStatus,
+) (*appsv1beta1.StatefulSetStatus, error) {
+
+	replicaCount := int(*set.Spec.Replicas)
+
+	// we compute the minimum ordinal of the target sequence for a destructive update based on the strategy.
+	updateMin := 0
+	maxUnavailable := 1
+	if set.Spec.UpdateStrategy.RollingUpdate != nil {
+		updateMin = int(*set.Spec.UpdateStrategy.RollingUpdate.Partition)
+
+		// if the feature was enabled and then later disabled, MaxUnavailable may have a value
+		// other than 1. Ignore the passed in value and Use maxUnavailable as 1 to enforce
+		// expected behavior when feature gate is not enabled.
+		var err error
+		maxUnavailable, err = intstrutil.GetValueFromIntOrPercent(intstrutil.ValueOrDefault(set.Spec.UpdateStrategy.RollingUpdate.MaxUnavailable, intstrutil.FromInt(1)), int(replicaCount), false)
+		if err != nil {
+			return &status, err
+		}
+
+	}
+
+	// Collect all targets in the range between the 0 and Spec.Replicas. Count any targets in that range
+	// that are unhealthy i.e. terminated or not running and ready as unavailable). Select the
+	// (MaxUnavailable - Unavailable) Pods, in order with respect to their ordinal for termination. Delete
+	// those pods and count the successful deletions. Update the status with the correct number of deletions.
+	unavailablePods := 0
+	for target := len(replicas) - 1; target >= 0; target-- {
+		if !isHealthy(replicas[target]) {
+			unavailablePods++
+		}
+	}
+
+	if unavailablePods >= maxUnavailable {
+		klog.V(2).Infof("StatefulSet %s/%s found unavailablePods %v, more than or equal to allowed maxUnavailable %v",
+			set.Namespace,
+			set.Name,
+			unavailablePods,
+			maxUnavailable)
+		return &status, nil
+	}
+
+	// Now we need to delete MaxUnavailable- unavailablePods
+	// start deleting one by one starting from the highest ordinal first
+	podsToDelete := maxUnavailable - unavailablePods
+
+	deletedPods := 0
+	for target := len(replicas) - 1; target >= updateMin && deletedPods < podsToDelete; target-- {
+
+		// delete the Pod if it is healthy and the revision doesnt match the target
+		if getPodRevision(replicas[target]) != updateRevision.Name && !isTerminating(replicas[target]) {
+			// delete the Pod if it is healthy and the revision doesnt match the target
+			klog.V(2).Infof("StatefulSet %s/%s terminating Pod %s for update",
+				set.Namespace,
+				set.Name,
+				replicas[target].Name)
+			if err := ssc.podControl.DeleteStatefulPod(set, replicas[target]); err != nil {
+				if !errors.IsNotFound(err) {
+					return &status, err
+				}
+			}
+			deletedPods++
+			status.CurrentReplicas--
+		}
+	}
+	return &status, nil
+}
+
 // updateStatefulSetStatus updates set's Status to be equal to status. If status indicates a complete update, it is
 // mutated to indicate completion. If status is semantically equivalent to set's Status no update is performed. If the
 // returned error is nil, the update is successful.
 func (ssc *defaultStatefulSetControl) updateStatefulSetStatus(
+	ctx context.Context,
 	set *appsv1beta1.StatefulSet,
 	status *appsv1beta1.StatefulSetStatus) error {
 
@@ -1007,7 +1083,7 @@ func (ssc *defaultStatefulSetControl) updateStatefulSetStatus(
 
 	// copy set and update its status
 	set = set.DeepCopy()
-	if err := ssc.statusUpdater.UpdateStatefulSetStatus(set, status); err != nil {
+	if err := ssc.statusUpdater.UpdateStatefulSetStatus(ctx, set, status); err != nil {
 		return err
 	}
 

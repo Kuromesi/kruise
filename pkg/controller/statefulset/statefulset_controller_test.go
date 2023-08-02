@@ -130,7 +130,7 @@ func TestStatefulSetControllerRespectsTermination(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	ssc.syncStatefulSet(set, pods)
+	ssc.syncStatefulSet(context.TODO(), set, pods)
 	selector, err := metav1.LabelSelectorAsSelector(set.Spec.Selector)
 	if err != nil {
 		t.Error(err)
@@ -181,7 +181,7 @@ func TestStatefulSetControllerBlocksScaling(t *testing.T) {
 		t.Error("Failed to set pod terminated at ordinal 0")
 	}
 	ssc.enqueueStatefulSet(set)
-	fakeWorker(ssc)
+	fakeWorker(context.TODO(), ssc)
 	selector, err := metav1.LabelSelectorAsSelector(set.Spec.Selector)
 	if err != nil {
 		t.Error(err)
@@ -196,7 +196,7 @@ func TestStatefulSetControllerBlocksScaling(t *testing.T) {
 	sort.Sort(ascendingOrdinal(pods))
 	spc.DeletePod(pods[0])
 	ssc.enqueueStatefulSet(set)
-	fakeWorker(ssc)
+	fakeWorker(context.TODO(), ssc)
 	pods, err = spc.podsLister.Pods(set.Namespace).List(selector)
 	if err != nil {
 		t.Error(err)
@@ -215,7 +215,7 @@ func TestStatefulSetControllerDeletionTimestamp(t *testing.T) {
 
 	// Force a sync. It should not try to create any Pods.
 	ssc.enqueueStatefulSet(set)
-	fakeWorker(ssc)
+	fakeWorker(context.TODO(), ssc)
 
 	selector, err := metav1.LabelSelectorAsSelector(set.Spec.Selector)
 	if err != nil {
@@ -248,7 +248,7 @@ func TestStatefulSetControllerDeletionTimestampRace(t *testing.T) {
 
 	// Force a sync. It should not try to create any Pods.
 	ssc.enqueueStatefulSet(set)
-	fakeWorker(ssc)
+	fakeWorker(context.TODO(), ssc)
 
 	selector, err := metav1.LabelSelectorAsSelector(set.Spec.Selector)
 	if err != nil {
@@ -548,7 +548,7 @@ func TestGetPodsForStatefulSetAdopt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pods, err := ssc.getPodsForStatefulSet(set, selector)
+	pods, err := ssc.getPodsForStatefulSet(context.TODO(), set, selector)
 	if err != nil {
 		t.Fatalf("getPodsForStatefulSet() error: %v", err)
 	}
@@ -585,7 +585,7 @@ func TestGetPodsForStatefulSetRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pods, err := ssc.getPodsForStatefulSet(set, selector)
+	pods, err := ssc.getPodsForStatefulSet(context.TODO(), set, selector)
 	if err != nil {
 		t.Fatalf("getPodsForStatefulSet() error: %v", err)
 	}
@@ -642,9 +642,9 @@ func newFakeStatefulSetController(initialObjects ...runtime.Object) (*StatefulSe
 	return ssc, om
 }
 
-func fakeWorker(ssc *StatefulSetController) {
+func fakeWorker(ctx context.Context, ssc *StatefulSetController) {
 	if obj, done := ssc.queue.Get(); !done {
-		ssc.sync(obj.(string))
+		ssc.sync(ctx, obj.(string))
 		ssc.queue.Done(obj)
 	}
 }
@@ -660,7 +660,7 @@ func getPodAtOrdinal(pods []*v1.Pod, ordinal int) *v1.Pod {
 func scaleUpStatefulSetController(set *appsv1beta1.StatefulSet, ssc *StatefulSetController, spc *fakeObjectManager) error {
 	spc.setsIndexer.Add(set)
 	ssc.enqueueStatefulSet(set)
-	fakeWorker(ssc)
+	fakeWorker(context.TODO(), ssc)
 	selector, err := metav1.LabelSelectorAsSelector(set.Spec.Selector)
 	if err != nil {
 		return err
@@ -676,7 +676,7 @@ func scaleUpStatefulSetController(set *appsv1beta1.StatefulSet, ssc *StatefulSet
 		}
 		pod := getPodAtOrdinal(pods, ord)
 		ssc.addPod(pod)
-		fakeWorker(ssc)
+		fakeWorker(context.TODO(), ssc)
 		pod = getPodAtOrdinal(pods, ord)
 		prev := *pod
 		if pods, err = spc.setPodRunning(set, ord); err != nil {
@@ -684,7 +684,7 @@ func scaleUpStatefulSetController(set *appsv1beta1.StatefulSet, ssc *StatefulSet
 		}
 		pod = getPodAtOrdinal(pods, ord)
 		ssc.updatePod(&prev, pod)
-		fakeWorker(ssc)
+		fakeWorker(context.TODO(), ssc)
 		pod = getPodAtOrdinal(pods, ord)
 		prev = *pod
 		if pods, err = spc.setPodReady(set, ord); err != nil {
@@ -692,7 +692,7 @@ func scaleUpStatefulSetController(set *appsv1beta1.StatefulSet, ssc *StatefulSet
 		}
 		pod = getPodAtOrdinal(pods, ord)
 		ssc.updatePod(&prev, pod)
-		fakeWorker(ssc)
+		fakeWorker(context.TODO(), ssc)
 		if err := assertMonotonicInvariants(set, spc); err != nil {
 			return err
 		}
@@ -720,17 +720,17 @@ func scaleDownStatefulSetController(set *appsv1beta1.StatefulSet, ssc *StatefulS
 	fakeResourceVersion(set)
 	spc.setsIndexer.Add(set)
 	ssc.enqueueStatefulSet(set)
-	fakeWorker(ssc)
+	fakeWorker(context.TODO(), ssc)
 	pods, err = spc.addTerminatingPod(set, ord)
 	if err != nil {
 		return err
 	}
 	pod = getPodAtOrdinal(pods, ord)
 	ssc.updatePod(&prev, pod)
-	fakeWorker(ssc)
+	fakeWorker(context.TODO(), ssc)
 	spc.DeletePod(pod)
 	ssc.deletePod(pod)
-	fakeWorker(ssc)
+	fakeWorker(context.TODO(), ssc)
 	for set.Status.Replicas > *set.Spec.Replicas {
 		pods, err = spc.podsLister.Pods(set.Namespace).List(selector)
 		if err != nil {
@@ -744,10 +744,10 @@ func scaleDownStatefulSetController(set *appsv1beta1.StatefulSet, ssc *StatefulS
 		}
 		pod = getPodAtOrdinal(pods, ord)
 		ssc.updatePod(&prev, pod)
-		fakeWorker(ssc)
+		fakeWorker(context.TODO(), ssc)
 		spc.DeletePod(pod)
 		ssc.deletePod(pod)
-		fakeWorker(ssc)
+		fakeWorker(context.TODO(), ssc)
 		obj, _, err := spc.setsIndexer.Get(set)
 		if err != nil {
 			return err
@@ -791,7 +791,6 @@ func NewStatefulSetController(
 			control: NewDefaultStatefulSetControl(
 				NewStatefulPodControl(
 					kubeClient,
-					setInformer.Lister(),
 					podInformer.Lister(),
 					pvcInformer.Lister(),
 					recorder),
@@ -841,27 +840,27 @@ func NewStatefulSetController(
 }
 
 // Run runs the statefulset controller.
-func (ssc *StatefulSetController) Run(workers int, stopCh <-chan struct{}) {
+func (ssc *StatefulSetController) Run(ctx context.Context, workers int) {
 	defer utilruntime.HandleCrash()
 	defer ssc.queue.ShutDown()
 
 	klog.Infof("Starting stateful set controller")
 	defer klog.Infof("Shutting down statefulset controller")
 
-	if !cache.WaitForNamedCacheSync("stateful set", stopCh, ssc.podListerSynced, ssc.setListerSynced, ssc.pvcListerSynced, ssc.revListerSynced) {
+	if !cache.WaitForNamedCacheSync("stateful set", ctx.Done(), ssc.podListerSynced, ssc.setListerSynced, ssc.pvcListerSynced, ssc.revListerSynced) {
 		return
 	}
 
 	for i := 0; i < workers; i++ {
-		go wait.Until(ssc.worker, time.Second, stopCh)
+		go wait.UntilWithContext(ctx, ssc.worker, time.Second)
 	}
 
-	<-stopCh
+	ctx.Done()
 }
 
 // worker runs a worker goroutine that invokes processNextWorkItem until the controller's queue is closed
-func (ssc *StatefulSetController) worker() {
-	for ssc.processNextWorkItem() {
+func (ssc *StatefulSetController) worker(ctx context.Context) {
+	for ssc.processNextWorkItem(ctx) {
 	}
 }
 
@@ -877,13 +876,13 @@ func (ssc *StatefulSetController) enqueueStatefulSet(obj interface{}) {
 
 // processNextWorkItem dequeues items, processes them, and marks them done. It enforces that the syncHandler is never
 // invoked concurrently with the same key.
-func (ssc *StatefulSetController) processNextWorkItem() bool {
+func (ssc *StatefulSetController) processNextWorkItem(ctx context.Context) bool {
 	key, quit := ssc.queue.Get()
 	if quit {
 		return false
 	}
 	defer ssc.queue.Done(key)
-	if err := ssc.sync(key.(string)); err != nil {
+	if err := ssc.sync(ctx, key.(string)); err != nil {
 		utilruntime.HandleError(fmt.Errorf("Error syncing StatefulSet %v, requeuing: %v", key.(string), err))
 		ssc.queue.AddRateLimited(key)
 	} else {
@@ -892,7 +891,7 @@ func (ssc *StatefulSetController) processNextWorkItem() bool {
 	return true
 }
 
-func (ssc *StatefulSetController) sync(key string) error {
+func (ssc *StatefulSetController) sync(ctx context.Context, key string) error {
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
 		return err
@@ -1051,10 +1050,14 @@ func (ssc *StatefulSetController) getStatefulSetsForPod(pod *v1.Pod) []*appsv1be
 	if len(sets) > 1 {
 		// ControllerRef will ensure we don't do anything crazy, but more than one
 		// item in this list nevertheless constitutes user error.
+		setNames := []string{}
+		for _, s := range sets {
+			setNames = append(setNames, s.Name)
+		}
 		utilruntime.HandleError(
 			fmt.Errorf(
-				"user error: more than one StatefulSet is selecting pods with labels: %+v",
-				pod.Labels))
+				"user error: more than one StatefulSet is selecting pods with labels: %+v. Sets: %v",
+				pod.Labels, setNames))
 	}
 	return sets
 }

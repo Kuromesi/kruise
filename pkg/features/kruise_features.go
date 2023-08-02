@@ -105,6 +105,9 @@ const (
 	// PreparingUpdateAsUpdate enable CloneSet/Advanced StatefulSet controller to regard preparing-update Pod
 	// as updated when calculating update/current revision during scaling.
 	PreparingUpdateAsUpdate featuregate.Feature = "PreparingUpdateAsUpdate"
+
+	// Enables maxUnavailable for StatefulSet
+	MaxUnavailableStatefulSet featuregate.Feature = "MaxUnavailableStatefulSet"
 )
 
 var defaultFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
