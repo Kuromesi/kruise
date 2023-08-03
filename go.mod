@@ -145,7 +145,7 @@ require (
 	sigs.k8s.io/yaml v1.3.0 // indirect
 )
 
-// Replace to match K8s 1.24.0
+// Replace to match K8s 1.24.16
 replace (
 	k8s.io/api => k8s.io/api v0.24.16
 	k8s.io/apiextensions-apiserver => k8s.io/apiextensions-apiserver v0.24.16
