@@ -585,24 +585,16 @@ golang.org/x/time/rate
 # golang.org/x/tools v0.6.0
 ## explicit; go 1.18
 golang.org/x/tools/go/ast/astutil
-golang.org/x/tools/go/gcexportdata
-golang.org/x/tools/go/internal/packagesdriver
-golang.org/x/tools/go/packages
 golang.org/x/tools/imports
 golang.org/x/tools/internal/event
 golang.org/x/tools/internal/event/core
 golang.org/x/tools/internal/event/keys
 golang.org/x/tools/internal/event/label
 golang.org/x/tools/internal/fastwalk
-golang.org/x/tools/internal/gcimporter
 golang.org/x/tools/internal/gocommand
 golang.org/x/tools/internal/gopathwalk
 golang.org/x/tools/internal/imports
-golang.org/x/tools/internal/packagesinternal
-golang.org/x/tools/internal/pkgbits
-golang.org/x/tools/internal/tokeninternal
 golang.org/x/tools/internal/typeparams
-golang.org/x/tools/internal/typesinternal
 # gomodules.xyz/jsonpatch/v2 v2.2.0
 ## explicit; go 1.12
 gomodules.xyz/jsonpatch/v2
@@ -1167,8 +1159,8 @@ k8s.io/client-go/util/workqueue
 k8s.io/cloud-provider
 k8s.io/cloud-provider/volume
 k8s.io/cloud-provider/volume/helpers
-# k8s.io/code-generator v0.24.16 => k8s.io/code-generator v0.24.16
-## explicit; go 1.19
+# k8s.io/code-generator v0.24.16 => k8s.io/code-generator v0.22.6
+## explicit; go 1.16
 k8s.io/code-generator
 k8s.io/code-generator/cmd/client-gen
 k8s.io/code-generator/cmd/client-gen/args
@@ -1470,7 +1462,7 @@ sigs.k8s.io/yaml
 # k8s.io/client-go => k8s.io/client-go v0.24.16
 # k8s.io/cloud-provider => k8s.io/cloud-provider v0.24.16
 # k8s.io/cluster-bootstrap => k8s.io/cluster-bootstrap v0.24.16
-# k8s.io/code-generator => k8s.io/code-generator v0.24.16
+# k8s.io/code-generator => k8s.io/code-generator v0.22.6
 # k8s.io/component-base => k8s.io/component-base v0.24.16
 # k8s.io/component-helpers => k8s.io/component-helpers v0.24.16
 # k8s.io/controller-manager => k8s.io/controller-manager v0.24.16
