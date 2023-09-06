@@ -25,6 +25,9 @@ const (
 	ImagePreDownloadParallelismKey      = "apps.kruise.io/image-predownload-parallelism"
 	ImagePreDownloadTimeoutSecondsKey   = "apps.kruise.io/image-predownload-timeout-seconds"
 	ImagePreDownloadMinUpdatedReadyPods = "apps.kruise.io/image-predownload-min-updated-ready-pods"
+
+	// variable defined in pullSecrets field with ServiceAccountsPrefix indicates this is a ServiceAccount instead of Secret
+	ServiceAccountsPrefix = "ServiceAccount."
 )
 
 // ImagePullJobSpec defines the desired state of ImagePullJob

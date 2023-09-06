@@ -19,6 +19,7 @@ package util
 import (
 	"context"
 	"math/rand"
+	"strings"
 	"time"
 
 	appsv1alpha1 "github.com/openkruise/kruise/apis/apps/v1alpha1"
@@ -57,6 +58,26 @@ func (c cacheSecretItem) isExpired() bool {
 
 func (c *cacheBasedSecretManager) GetSecrets(secrets []appsv1alpha1.ReferenceObject) (ret []v1.Secret, err error) {
 	for _, secret := range secrets {
+		// if is serviceAccount, get imagePullSecrets of it
+		if strings.Contains(secret.Name, appsv1alpha1.ServiceAccountsPrefix) {
+			secretsFromSA := make([]appsv1alpha1.ReferenceObject, 0)
+			secret.Name = strings.Split(secret.Name, appsv1alpha1.ServiceAccountsPrefix)[1]
+			sa, err := c.client.CoreV1().ServiceAccounts(secret.Namespace).Get(context.TODO(), secret.Name, metav1.GetOptions{})
+			if err != nil {
+				klog.Errorf("failed to get serviceAccount %s, err %v", secret.Name, err)
+				continue
+			}
+			for _, s := range sa.ImagePullSecrets {
+				newSecret := appsv1alpha1.ReferenceObject{
+					Name:      s.Name,
+					Namespace: secret.Namespace,
+				}
+				secretsFromSA = append(secretsFromSA, newSecret)
+			}
+			retFromSA, _ := c.GetSecrets(secretsFromSA)
+			ret = append(ret, retFromSA...)
+			continue
+		}
 		if item, ok := c.cache[secret]; ok && !item.isExpired() {
 			ret = append(ret, *item.secret)
 		} else {
