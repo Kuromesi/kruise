@@ -124,6 +124,7 @@ jobs:
           restore-keys: ${{ runner.os }}-go-
       - name: Run Unit Tests
         run: |
+          git config core.filemode false
           make test
           git status
       - name: Publish Unit Test Coverage

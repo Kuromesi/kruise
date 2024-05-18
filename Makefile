@@ -48,6 +48,7 @@ lint: golangci-lint ## Run golangci-lint against code.
 
 test: generate fmt vet manifests envtest ## Run tests
 	echo $(ENVTEST)
+	chmod +x pkg/daemon/criruntime/imageruntime/fake_plugin/fake-credential-plugin
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) -p path)" go test ./pkg/... -coverprofile cover.out
 
 coverage-report: ## Generate cover.html from cover.out
