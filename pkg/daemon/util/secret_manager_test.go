@@ -83,3 +83,39 @@ func TestGetSecretsFromCache(t *testing.T) {
 		t.Errorf("unexpected data change")
 	}
 }
+
+func TestGetSecretsFromServiceAccounts(t *testing.T) {
+	fakeClient := fake.NewSimpleClientset()
+	secretManager := NewCacheBasedSecretManager(fakeClient)
+	serviceAccount := v1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pullSecrets",
+			Namespace: "ns-foo",
+		},
+		ImagePullSecrets: []v1.LocalObjectReference{
+			0: {Name: "foo"},
+		},
+	}
+
+	secret := v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "foo",
+			Namespace: "ns-foo",
+		},
+	}
+
+	if _, err := fakeClient.CoreV1().Secrets(secret.Namespace).Create(context.TODO(), &secret, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("failed to create fake secret: %v", err)
+	}
+	if _, err := fakeClient.CoreV1().ServiceAccounts(secret.Namespace).Create(context.TODO(), &serviceAccount, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("failed to create fake serviceAccount: %v", err)
+	}
+	secrets, err := secretManager.GetSecrets([]appsv1alpha1.ReferenceObject{{Namespace: "ns-foo", Name: "ServiceAccount.pullSecrets"}})
+	if err != nil || len(secrets) != 1 {
+		t.Fatalf("failed to get secret: %v", err)
+	}
+	secrets, err = secretManager.GetSecrets([]appsv1alpha1.ReferenceObject{{Namespace: "ns-foo", Name: "ServiceAccount.foo"}})
+	if err != nil || len(secrets) != 0 {
+		t.Fatalf("expect no secrets found: %v", err)
+	}
+}
