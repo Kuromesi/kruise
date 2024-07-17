@@ -227,16 +227,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := mgr.AddReadyzCheck("webhook-ready", webhook.Checker); err != nil {
-		setupLog.Error(err, "unable to add readyz check")
-		os.Exit(1)
+	isExternalCertsEnabled := utilfeature.DefaultFeatureGate.Enabled(features.EnableExternalCerts)
+	if isExternalCertsEnabled {
+		if err := mgr.AddReadyzCheck("webhook-ready", webhook.Checker); err != nil {
+			setupLog.Error(err, "unable to add readyz check")
+			os.Exit(1)
+		}
 	}
 
 	go func() {
-		setupLog.Info("wait webhook ready")
-		if err = webhook.WaitReady(); err != nil {
-			setupLog.Error(err, "unable to wait webhook ready")
-			os.Exit(1)
+		if isExternalCertsEnabled {
+			setupLog.Info("wait webhook ready")
+			if err = webhook.WaitReady(); err != nil {
+				setupLog.Error(err, "unable to wait webhook ready")
+				os.Exit(1)
+			}
 		}
 
 		setupLog.Info("setup controllers")

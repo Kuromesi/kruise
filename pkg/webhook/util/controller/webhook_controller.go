@@ -41,6 +41,8 @@ import (
 	"k8s.io/klog/v2"
 
 	extclient "github.com/openkruise/kruise/pkg/client"
+	"github.com/openkruise/kruise/pkg/features"
+	utilfeature "github.com/openkruise/kruise/pkg/util/feature"
 	webhooktypes "github.com/openkruise/kruise/pkg/webhook/types"
 	webhookutil "github.com/openkruise/kruise/pkg/webhook/util"
 	"github.com/openkruise/kruise/pkg/webhook/util/configuration"
@@ -209,7 +211,9 @@ func (c *Controller) processNextWorkItem() bool {
 	if err == nil {
 		c.queue.AddAfter(key, defaultResyncPeriod)
 		c.queue.Forget(key)
-		return true
+
+		// if using external certs, only check the caBundle when kruise startup
+		return !utilfeature.DefaultFeatureGate.Enabled(features.EnableExternalCerts)
 	}
 
 	utilruntime.HandleError(fmt.Errorf("sync %q failed with %v", key, err))
@@ -232,35 +236,50 @@ func (c *Controller) sync() error {
 	var certWriter writer.CertWriter
 	var err error
 
-	certWriterType := webhookutil.GetCertWriter()
-	if certWriterType == writer.FsCertWriter || (len(certWriterType) == 0 && len(webhookutil.GetHost()) != 0) {
-		certWriter, err = writer.NewFSCertWriter(writer.FSCertWriterOptions{
-			Path: webhookutil.GetCertDir(),
-		})
+	// if using external certs, only check whether the caBundle is set
+	if utilfeature.DefaultFeatureGate.Enabled(features.EnableExternalCerts) {
+		if err := writer.WriteCertsToDir(webhookutil.GetCertDir(), nil); err != nil {
+			return fmt.Errorf("failed to write certs to dir: %v", err)
+		}
+
+		if err := configuration.Ensure(c.kubeClient, c.handlers, []byte{}); err != nil {
+			return fmt.Errorf("failed to ensure configuration: %v", err)
+		}
+
+		if err := crd.Ensure(c.crdClient, c.crdLister, []byte{}); err != nil {
+			return fmt.Errorf("failed to ensure crd: %v", err)
+		}
 	} else {
-		certWriter, err = writer.NewSecretCertWriter(writer.SecretCertWriterOptions{
-			Clientset: c.kubeClient,
-			Secret:    &types.NamespacedName{Namespace: webhookutil.GetNamespace(), Name: webhookutil.GetSecretName()},
-		})
-	}
-	if err != nil {
-		return fmt.Errorf("failed to ensure certs: %v", err)
-	}
+		certWriterType := webhookutil.GetCertWriter()
+		if certWriterType == writer.FsCertWriter || (len(certWriterType) == 0 && len(webhookutil.GetHost()) != 0) {
+			certWriter, err = writer.NewFSCertWriter(writer.FSCertWriterOptions{
+				Path: webhookutil.GetCertDir(),
+			})
+		} else {
+			certWriter, err = writer.NewSecretCertWriter(writer.SecretCertWriterOptions{
+				Clientset: c.kubeClient,
+				Secret:    &types.NamespacedName{Namespace: webhookutil.GetNamespace(), Name: webhookutil.GetSecretName()},
+			})
+		}
+		if err != nil {
+			return fmt.Errorf("failed to ensure certs: %v", err)
+		}
 
-	certs, _, err := certWriter.EnsureCert(dnsName)
-	if err != nil {
-		return fmt.Errorf("failed to ensure certs: %v", err)
-	}
-	if err := writer.WriteCertsToDir(webhookutil.GetCertDir(), certs); err != nil {
-		return fmt.Errorf("failed to write certs to dir: %v", err)
-	}
+		certs, _, err := certWriter.EnsureCert(dnsName)
+		if err != nil {
+			return fmt.Errorf("failed to ensure certs: %v", err)
+		}
+		if err := writer.WriteCertsToDir(webhookutil.GetCertDir(), certs); err != nil {
+			return fmt.Errorf("failed to write certs to dir: %v", err)
+		}
 
-	if err := configuration.Ensure(c.kubeClient, c.handlers, certs.CACert); err != nil {
-		return fmt.Errorf("failed to ensure configuration: %v", err)
-	}
+		if err := configuration.Ensure(c.kubeClient, c.handlers, certs.CACert); err != nil {
+			return fmt.Errorf("failed to ensure configuration: %v", err)
+		}
 
-	if err := crd.Ensure(c.crdClient, c.crdLister, certs.CACert); err != nil {
-		return fmt.Errorf("failed to ensure crd: %v", err)
+		if err := crd.Ensure(c.crdClient, c.crdLister, certs.CACert); err != nil {
+			return fmt.Errorf("failed to ensure crd: %v", err)
+		}
 	}
 
 	onceInit.Do(func() {

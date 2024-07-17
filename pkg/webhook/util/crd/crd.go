@@ -32,6 +32,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/openkruise/kruise/apis"
+	"github.com/openkruise/kruise/pkg/features"
+	utilfeature "github.com/openkruise/kruise/pkg/util/feature"
 	webhookutil "github.com/openkruise/kruise/pkg/webhook/util"
 )
 
@@ -47,6 +49,22 @@ func Ensure(client apiextensionsclientset.Interface, lister apiextensionslisters
 	crdList, err := lister.List(labels.Everything())
 	if err != nil {
 		return fmt.Errorf("failed to list crds: %v", err)
+	}
+
+	if utilfeature.DefaultFeatureGate.Enabled(features.EnableExternalCerts) {
+		for _, crd := range crdList {
+			if len(crd.Spec.Versions) == 0 || crd.Spec.Conversion == nil || crd.Spec.Conversion.Strategy != apiextensionsv1.WebhookConverter {
+				continue
+			}
+			if !kruiseScheme.Recognizes(schema.GroupVersionKind{Group: crd.Spec.Group, Version: crd.Spec.Versions[0].Name, Kind: crd.Spec.Names.Kind}) {
+				continue
+			}
+
+			if crd.Spec.Conversion.Webhook == nil || crd.Spec.Conversion.Webhook.ClientConfig == nil || crd.Spec.Conversion.Webhook.ClientConfig.CABundle == nil {
+				return fmt.Errorf("bad conversion configuration of CRD %s", crd.Name)
+			}
+		}
+		return nil
 	}
 
 	webhookConfig := apiextensionsv1.WebhookClientConfig{
