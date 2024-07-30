@@ -119,7 +119,7 @@ func Initialize(ctx context.Context, cfg *rest.Config) error {
 	case <-webhookcontroller.Inited():
 		return nil
 	case <-timer.C:
-		return fmt.Errorf("failed to start webhook controller for waiting more than 20s")
+		return fmt.Errorf("failed to start webhook controller for waiting more than 30s")
 	}
 }
 
