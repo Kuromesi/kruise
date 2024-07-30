@@ -55,8 +55,7 @@ const (
 	mutatingWebhookConfigurationName   = "kruise-mutating-webhook-configuration"
 	validatingWebhookConfigurationName = "kruise-validating-webhook-configuration"
 
-	defaultResyncPeriod      = time.Minute
-	WaitForExternalCertsSync = 10 * time.Second
+	defaultResyncPeriod = time.Minute
 )
 
 var (
@@ -192,10 +191,6 @@ func (c *Controller) Start(ctx context.Context) {
 		return
 	}
 
-	if utilfeature.DefaultFeatureGate.Enabled(features.EnableExternalCerts) {
-		// wait 10s for external certs to be synced
-		time.Sleep(WaitForExternalCertsSync)
-	}
 	go wait.Until(func() {
 		for c.processNextWorkItem() {
 		}

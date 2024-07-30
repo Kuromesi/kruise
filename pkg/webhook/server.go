@@ -113,7 +113,7 @@ func Initialize(ctx context.Context, cfg *rest.Config) error {
 		c.Start(ctx)
 	}()
 
-	timer := time.NewTimer(time.Second * 30)
+	timer := time.NewTimer(time.Second * 20)
 	defer timer.Stop()
 	select {
 	case <-webhookcontroller.Inited():
